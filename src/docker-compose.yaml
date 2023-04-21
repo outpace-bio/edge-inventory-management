@@ -4,7 +4,7 @@ services:
     build: ./backend
     image: flask-app
     expose:
-      - "5000"
+      - "8000"
     volumes:
       - /greengrass/v2:/greengrass/v2
     environment:
