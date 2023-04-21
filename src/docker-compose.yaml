@@ -2,7 +2,7 @@ version: "3.0"
 services:
   backend:
     build: ./backend
-    image: flask-app
+    image: inventory-manager-backend
     expose:
       - "8000"
     volumes:
@@ -16,7 +16,7 @@ services:
       - AWS_IOT_THING_NAME
   frontend:
     build: ./frontend
-    image: react-webapp
+    image: inventory-manager-webserver
     ports:
       - "3000:3001"
     volumes:
