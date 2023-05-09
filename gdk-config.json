@@ -13,8 +13,8 @@
         ]
       },
       "publish": {
-        "bucket": "<PLACEHOLDER BUCKET HERE>",
-        "region": "<PLACEHOLDER REGION HERE>"
+        "bucket": "opb-greengrass-components",
+        "region": "us-west-2"
       }
     }
   },
