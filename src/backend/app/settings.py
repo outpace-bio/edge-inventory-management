@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         raise ValueError(v)
 
     # Application configuration
-    APP_NAME: str
+    APP_NAME: str = "InventoryManager"
 
     # Logger configuration
     LOG_FORMAT: str = "%(levelprefix)s | %(asctime)s | %(message)s"
