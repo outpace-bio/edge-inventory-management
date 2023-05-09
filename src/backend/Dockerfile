@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir --upgrade -r /app/requirements.txt
 # export port for the container
 EXPOSE 8000
 
-CMD ["uvicorn", "aquario.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 RUN adduser --system backend
 USER backend
