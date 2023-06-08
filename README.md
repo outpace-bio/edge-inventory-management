@@ -35,13 +35,6 @@ First, we need to provide a username and password for authenticating into local 
 
 > NOTE: in macOS, run `bash` before running the following commands.
 
-```console
-read -s -p "Enter user:" LOCALWEBSERVER_USER
-read -s -p "Enter password:" LOCALWEBSERVER_PASSWORD
-aws secretsmanager create-secret --name localwebserver_credentials
-aws secretsmanager put-secret-value --secret-id localwebserver_credentials --secret-string "{\"username\":\"$LOCALWEBSERVER_USER\",\"password\":\"$LOCALWEBSERVER_PASSWORD\"}"
-```
-
 ## Dependencies
 
 When you deploy a component, AWS IoT Greengrass also deploys compatible versions of its dependencies. This means that you must meet the requirements for the component and all of its dependencies to successfully deploy the component. This section lists the dependencies for the released versions of this component and the semantic version constraints that define the component versions for each dependency. You can also view the dependencies for each version of the component in the [AWS IoT Greengrass console](https://console.aws.amazon.com/greengrass). On the component details page, look for the Dependencies list.
@@ -51,7 +44,6 @@ When you deploy a component, AWS IoT Greengrass also deploys compatible versions
 | Dependency | Compatible versions | Dependency type |
 |---|---|---|
 | aws.greengrass.Nucleus | >=2.4.0 | Soft |
-| aws.greengrass.SecretManager | >=2.0.9 | Soft |
 
 ## Build and publish Greengrass component
 
@@ -124,7 +116,6 @@ In **Step 1 - Specify Target**, click **Next**.
 Unselect **Show only selected components** under **My Components** and **Public Components**. Then make sure the following components are checked:
 
 * aws.greengrass.labs.LocalWebServer
-* aws.greengrass.SecretManager
 
 Then, click Next.
 

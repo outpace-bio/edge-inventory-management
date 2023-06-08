@@ -1,0 +1,551 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# *** Change this to something useful for you!
+Description: |
+  Codepipeline for inventory management web server greengrass component
+
+Parameters:
+  # *** The remaining parameters should either be:
+  # - overridden via changing "Default" here (PREFERABLE, since then they're in source control)
+  # - or you can pass them in when creating / updating the stack
+  
+  # *** The owner of the Github repo for this application.
+  FullRepositoryId:
+    Description: The repository of the application. i.e. ${githubHandle}/${repoName}
+    Type: String
+    Default: outpace-bio/inventory-management-web-server
+  GitBranch:
+    Description: The name of the main branch of the application.
+    Type: String
+    Default: main
+  CodeStarConnectionArn:
+    Description: The ARN of the CodeStar connection to the GitHub repository
+    Type: String
+  ApplicationName:
+    Description: The name of the application that is being deployed
+    Type: String
+    Default: InventoryManagementWebServer
+  ApplicationDomain:
+    Description: The domain of the application that is being deployed
+    Type: String
+  Environment:
+    Description: Resource tag to use for test resources.
+    Type: String
+  ImageTag:
+    Description: The tag of the image that is being deployed
+    Type: String
+  CodePipelineExecutionRoleArn:
+    Description: The ARN of the CodePipeline execution role
+    Type: String
+  CodeBuildEnvironmentType:
+    Description: The type of environment to use for the CodeBuild project
+    Type: String
+    Default: LINUX_CONTAINER
+    AllowedValues:
+      - LINUX_CONTAINER
+      - WINDOWS_CONTAINER
+      - LINUX_GPU_CONTAINER
+  CodeBuildEnvironmentImage:
+    Description: The image to use for the CodeBuild project
+    Type: String
+    Default: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+  CodeBuildComputeType:
+    Description: The compute type to use for the CodeBuild project
+    Type: String
+    Default: BUILD_GENERAL1_SMALL
+    AllowedValues:
+      - BUILD_GENERAL1_SMALL
+      - BUILD_GENERAL1_MEDIUM
+      - BUILD_GENERAL1_LARGE
+      - BUILD_GENERAL1_2XLARGE
+
+Resources:
+##################################################
+# S3 Buckets
+##################################################
+
+  PipelineArtifactsLoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Join
+        - "-"
+        - - Fn::Transform:
+              Name: "String"
+              Parameters:
+                InputString: !Ref ApplicationName
+                Operation: Lower
+          - "artifacts"
+          - "logs"
+      AccessControl: "LogDeliveryWrite"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags: 
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Domain
+          Value: !Ref ApplicationDomain
+        - Key: StackId
+          Value: !Ref AWS::StackId
+
+  PipelineArtifactsLoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PipelineArtifactsLoggingBucket
+      PolicyDocument:
+        Statement:
+          - Effect: "Deny"
+            Action: "s3:*"
+            Principal: "*"
+            Resource:
+              - !Sub "${PipelineArtifactsLoggingBucket.Arn}/*"
+              - !GetAtt PipelineArtifactsLoggingBucket.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Join
+        - "-"
+        - - Fn::Transform:
+              Name: "String"
+              Parameters:
+                InputString: !Ref ApplicationName
+                Operation: Lower
+          - "artifacts"
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName:
+          !Ref PipelineArtifactsLoggingBucket
+        LogFilePrefix: "artifacts-logs"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags: 
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Domain
+          Value: !Ref ApplicationDomain
+        - Key: StackId
+          Value: !Ref AWS::StackId
+
+  PipelineArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: CodePipelineExecutionRole
+    Properties:
+      Bucket: !Ref PipelineArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: "Deny"
+            Action: "s3:*"
+            Principal: "*"
+            Resource:
+              - !Sub  "${PipelineArtifactsBucket.Arn}/*"
+              - !GetAtt PipelineArtifactsBucket.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${PipelineArtifactsBucket}
+              - !Sub arn:${AWS::Partition}:s3:::${PipelineArtifactsBucket}/*
+            Principal:
+              AWS:
+                - !GetAtt CodePipelineExecutionRole.Arn
+
+##################################################
+# Roles
+##################################################
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join
+        - ""
+        - - !Ref ApplicationName
+          - !Ref Environment
+          - Fn::Transform:
+              Name: "String"
+              Parameters:
+                InputString: !Ref ImageTag
+                Operation: Capitalize
+          - CodeBuildServiceRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+        - PolicyName: CodeBuildArtifactsBucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${PipelineArtifactsBucket}/*"
+              - Effect: Allow 
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${PipelineArtifactsBucket}"
+        - PolicyName: SecretsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action: 
+                  - "secretsmanager:GetResourcePolicy"
+                  - "secretsmanager:GetSecretValue"
+                  - "secretsmanager:DescribeSecret"
+                  - "secretsmanager:ListSecretVersionIds"
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/dockerhub*
+                  - !Join
+                    - "/"
+                    - - !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:"
+                      - Fn::Transform:
+                          Name: "String"
+                          Parameters:
+                            InputString: !Ref ApplicationName
+                            Operation: Lower
+                      - Fn::Transform:
+                          Name: "String"
+                          Parameters:
+                            InputString: !Ref Environment
+                            Operation: Lower
+                      - "*"
+                Effect: "Allow"
+              - Action: 
+                  - "secretsmanager:ListSecrets"
+                Resource: "*"
+                Effect: "Allow"
+  #  ____  _            _ _
+  # |  _ \(_)_ __   ___| (_)_ __   ___
+  # | |_) | | '_ \ / _ | | | '_ \ / _ \
+  # |  __/| | |_) |  __| | | | | |  __/
+  # |_|   |_| .__/ \___|_|_|_| |_|\___|
+  #         |_|
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Join
+        - "-"
+        - - Fn::Transform:
+              Name: "String"
+              Parameters:
+                InputString: !Ref ApplicationName
+                Operation: Lower
+          - Fn::Transform:
+              Name: "String"
+              Parameters:
+                InputString: !Ref Environment
+                Operation: Lower
+          - !Ref ImageTag
+          - pipeline
+      ArtifactStore:
+        Location: !Ref PipelineArtifactsBucket
+        Type: S3
+      RoleArn: !Ref CodePipelineExecutionRoleArn
+      RestartExecutionOnUpdate: true
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceCodeRepo
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref CodeStarConnectionArn
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref GitBranch
+              OutputArtifacts:
+                - Name: SourceCodeAsZip
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Join
+                  - "-"
+                  - - !Ref ApplicationName
+                    - Fn::Transform:
+                        Name: "String"
+                        Parameters:
+                          InputString: !Ref ImageTag
+                          Operation: Capitalize
+                    - !Ref Environment
+              InputArtifacts:
+                - Name: SourceCodeAsZip
+              RunOrder: 1
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+          Action: sts:AssumeRole
+
+  CodePipelineServiceRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+            - iam:PassRole
+            Resource: "*"
+            Effect: Allow
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                - cloudformation.amazonaws.com
+                - elasticbeanstalk.amazonaws.com
+                - ec2.amazonaws.com
+                - ecs-tasks.amazonaws.com
+          - Action:
+            - codecommit:CancelUploadArchive
+            - codecommit:GetBranch
+            - codecommit:GetCommit
+            - codecommit:GetRepository
+            - codecommit:GetUploadArchiveStatus
+            - codecommit:UploadArchive
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - codedeploy:CreateDeployment
+            - codedeploy:GetApplication
+            - codedeploy:GetApplicationRevision
+            - codedeploy:GetDeployment
+            - codedeploy:GetDeploymentConfig
+            - codedeploy:RegisterApplicationRevision
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - codestar-connections:UseConnection
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - elasticbeanstalk:*
+            - ec2:*
+            - elasticloadbalancing:*
+            - autoscaling:*
+            - cloudwatch:*
+            - s3:*
+            - sns:*
+            - cloudformation:*
+            - rds:*
+            - sqs:*
+            - ecs:*
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - lambda:InvokeFunction
+            - lambda:ListFunctions
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - opsworks:CreateDeployment
+            - opsworks:DescribeApps
+            - opsworks:DescribeCommands
+            - opsworks:DescribeDeployments
+            - opsworks:DescribeInstances
+            - opsworks:DescribeStacks
+            - opsworks:UpdateApp
+            - opsworks:UpdateStack
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - cloudformation:CreateStack
+            - cloudformation:DeleteStack
+            - cloudformation:DescribeStacks
+            - cloudformation:UpdateStack
+            - cloudformation:CreateChangeSet
+            - cloudformation:DeleteChangeSet
+            - cloudformation:DescribeChangeSet
+            - cloudformation:ExecuteChangeSet
+            - cloudformation:SetStackPolicy
+            - cloudformation:ValidateTemplate
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - codebuild:BatchGetBuilds
+            - codebuild:StartBuild
+            - codebuild:BatchGetBuildBatches
+            - codebuild:StartBuildBatch
+            Resource: "*"
+            Effect: Allow
+          - Effect: Allow
+            Action:
+            - devicefarm:ListProjects
+            - devicefarm:ListDevicePools
+            - devicefarm:GetRun
+            - devicefarm:GetUpload
+            - devicefarm:CreateUpload
+            - devicefarm:ScheduleRun
+            Resource: "*"
+          - Effect: Allow
+            Action:
+            - servicecatalog:ListProvisioningArtifacts
+            - servicecatalog:CreateProvisioningArtifact
+            - servicecatalog:DescribeProvisioningArtifact
+            - servicecatalog:DeleteProvisioningArtifact
+            - servicecatalog:UpdateProduct
+            Resource: "*"
+          - Effect: Allow
+            Action:
+            - cloudformation:ValidateTemplate
+            Resource: "*"
+          - Effect: Allow
+            Action:
+            - ecr:DescribeImages
+            Resource: "*"
+          - Effect: Allow
+            Action:
+            - states:DescribeExecution
+            - states:DescribeStateMachine
+            - states:StartExecution
+            Resource: "*"
+          - Effect: Allow
+            Action:
+            - appconfig:StartDeployment
+            - appconfig:StopDeployment
+            - appconfig:GetDeployment
+            Resource: "*"
+      PolicyName: CodePipelineServiceRolePolicy
+      Roles: 
+        - !Ref CodePipelineRole
+
+
+##################################################
+# Code Build Projects
+##################################################
+
+  CodeBuildProjectDeploy:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Join
+        - "-"
+        - - !Ref ApplicationName
+          - Fn::Transform:
+              Name: "String"
+              Parameters:
+                InputString: !Ref ImageTag
+                Operation: Capitalize
+          - !Ref Environment
+      Description: !Join
+        - ""
+        - - "Build Docker container for the "
+          - !Ref ApplicationName
+          - !Ref Environment
+          - !Sub " ${ImageTag} image"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref CodeBuildEnvironmentType
+        ComputeType: !Ref CodeBuildComputeType
+        Image: !Ref CodeBuildEnvironmentImage
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ENV_SECRET_PREFIX
+            Value: !Join
+              - "/"
+              - - ""
+                - Fn::Transform:
+                    Name: "String"
+                    Parameters:
+                      InputString: !Ref ApplicationName
+                      Operation: Lower
+                - Fn::Transform:
+                    Name: "String"
+                    Parameters:
+                      InputString: !Ref Environment
+                      Operation: Lower
+                - Fn::Transform:
+                    Name: "String"
+                    Parameters:
+                      InputString: !Ref ImageTag
+                      Operation: Lower
+          - Name: ENV_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: ENV_IMAGE_REPO_NAME
+            Value: 
+              Fn::Transform:
+                Name: "String"
+                Parameters:
+                  InputString: !Ref ApplicationName
+                  Operation: Lower
+          - Name: ENV_IMAGE_TAG
+            Value: !Join
+              - "-"
+              - - Fn::Transform:
+                    Name: "String"
+                    Parameters:
+                      InputString: !Ref ImageTag
+                      Operation: Lower
+                - Fn::Transform:
+                    Name: "String"
+                    Parameters:
+                      InputString: !Ref Environment
+                      Operation: Lower
+          - Name: ENV_REGION
+            Value: !Ref AWS::Region
+      ResourceAccessRole: !GetAtt CodeBuildServiceRole.Arn
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: infrastructure/buildspec.yml
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Domain
+          Value: !Ref ApplicationDomain
